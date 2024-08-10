@@ -8,9 +8,10 @@ import subprocess
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackContext, filters
-import telegram  # Importing telegram module
+import telegram
 from elevenlabs.core import ApiError
 import asyncio
+from telegram.constants import ParseMode
 
 # Load environment variables
 load_dotenv()
@@ -20,9 +21,8 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Initialize ElevenLabs client
+# Initialize ElevenLabs client and recognizer once
 client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-
 recognizer = sr.Recognizer()
 
 def generate_response(transcript):
@@ -47,8 +47,8 @@ Question: "What do you say to Americans concerned about your age and mental fitn
 Real Biden Response: "Well, look, after that debate, I did ten major events in a row, including until 02:00 in the morning. After that debate, I did events in North Carolina. I did events in Georgia. Did events like this today. Large crowds, overwhelming response, no slipping. And so I just had a bad night. I don't know why I, and how."
 
 AI Biden Response: "I understand that my age and mental fitness are valid concerns for many Americans. Let me assure you, my commitment to serving this country remains unwavering. Since that debate, I have participated in numerous events, from North Carolina to Georgia, meeting with large crowds and receiving overwhelming support. I continue to work tirelessly every day, just as I have for the past three and a half years. My focus is on leading this country towards a brighter future, addressing the challenges we face, and delivering on the promises we've made. Together, we will achieve great things.
-above are only example for referencne but Give me responses/reply in only 120 characters strictly. """
-    
+above are only example for reference but Give me responses/reply in only 120 characters strictly."""
+
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -81,7 +81,7 @@ def text_to_video(text, user_id):
                 audio_file.write(chunk)
     
         # Run Wave2Lip inference
-        subprocess.run(["python", "inference.py", "--checkpoint_path", "checkpoints/wav2lip_gan.pth", "--face", "biden.mp4", "--audio", audio_file_path,"--resize_factor","2"])
+        subprocess.run(["python", "inference.py", "--checkpoint_path", "checkpoints/wav2lip_gan.pth", "--face", "biden.mp4", "--audio", audio_file_path, "--resize_factor", "2"])
 
         result_video_path = "results/result_voice.mp4"
         return result_video_path
@@ -92,65 +92,83 @@ def text_to_video(text, user_id):
 
 async def start(update: Update, context: CallbackContext) -> None:
     keyboard = [
-        [KeyboardButton("/start"), KeyboardButton("/instructions")]
+        [KeyboardButton("/start"), KeyboardButton("/instructions")],
+        [KeyboardButton("💬 Text Message"), KeyboardButton("🎤 Voice Message")],
+        [KeyboardButton("/About")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     welcome_message = (
-        "🟠 Hello! Welcome to President AI Biden.\n\n"
+        "🟠 *Hello! Welcome to President AI Biden.*\n\n"
         "‼ Just type your message or send a voice note to get started. If you need help, tap the buttons below."
     )
-    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+    await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
-async def help_command(update: Update, context: CallbackContext) -> None:
+async def instructions(update: Update, context: CallbackContext) -> None:
     keyboard = [
-        [KeyboardButton("/start"), KeyboardButton("/instructions")]
+        [KeyboardButton("/start"), KeyboardButton("/instructions")],
+        [KeyboardButton("/About")],
+        [KeyboardButton("💬 Text Message"), KeyboardButton("🎤 Voice Message")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    help_message = (
-        "🟠 Here’s how you can interact with President AI Biden:\n\n"
-        "‼ Send a text message – Get a video response from President Biden.\n"
-        "‼ Send a voice message – Receive a transcribed and responded video.\n\n"
+    instructions_message = (
+        "🟠 *Here’s how you can interact with President AI Biden:*\n\n"
+        "‼ Send a *text message* – Get a video response from President Biden.\n"
+        "‼ Send a *voice message* – Receive a transcribed and responded video.\n\n"
         "For further assistance, tap the buttons below!"
     )
-    await update.message.reply_text(help_message, reply_markup=reply_markup)
+    await update.message.reply_text(instructions_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+
+async def about(update: Update, context: CallbackContext) -> None:
+    keyboard = [
+        [KeyboardButton("/start"), KeyboardButton("/instructions")],
+        [KeyboardButton("/About")],
+        [KeyboardButton("💬 Text Message"), KeyboardButton("🎤 Voice Message")],
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    about_message = (
+        "🟠 *About President AI Biden Bot:*\n\n"
+        "🤖 This bot uses advanced AI to generate video responses mimicking President Joe Biden.\n\n"
+        "💬 You can send text messages or voice notes to receive video responses in his style.\n\n"
+        "📈 The bot leverages cutting-edge technologies for text-to-speech and lip-syncing to create realistic interactions.\n\n"
+        "🔄 Due to high computational demands, video processing may take some time."
+    )
+    await update.message.reply_text(about_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_text(update: Update, context: CallbackContext) -> None:
     user_text = update.message.text
-    if user_text == '/start':
-        await start(update, context)
-    elif user_text == '/instructions':
-        await help_command(update, context)
+    if user_text in ['/start', '/instructions', '/about']:
+        return  # Commands are handled separately and don't require video generation.
+    
+    await update.message.reply_text('Processing Started ‼')
+
+    # Sending an initial "Loading" message with blinking dots
+    loading_message = await update.message.reply_text("Loading")
+
+    async def update_loading_message():
+        while True:
+            for dots in ['', '.', '..', '...']:
+                try:
+                    await loading_message.edit_text(f"Loading{dots}")
+                except telegram.error.BadRequest:
+                    pass
+                await asyncio.sleep(1)
+
+    # Start updating the loading message
+    task = asyncio.create_task(update_loading_message())
+
+    # Generate response and create video asynchronously
+    ai_response = await asyncio.to_thread(generate_response, user_text)
+    video_path = await asyncio.to_thread(text_to_video, ai_response, update.message.chat_id)
+
+    # Stop the loading message update
+    task.cancel()
+    await loading_message.delete()
+
+    # Send the video or an error message
+    if video_path:
+        await update.message.reply_video(video_path)
     else:
-        await update.message.reply_text('Processing Started ‼')
-
-        # Sending an initial "Loading" message with blinking dots
-        loading_message = await update.message.reply_text("Loading")
-
-        async def update_loading_message():
-            while True:
-                for dots in ['', '.', '..', '...']:
-                    try:
-                        await loading_message.edit_text(f"Loading{dots}")
-                    except telegram.error.BadRequest:
-                        pass
-                    await asyncio.sleep(1)
-
-        # Start updating the loading message
-        task = asyncio.create_task(update_loading_message())
-
-        # Generate response and create video asynchronously
-        ai_response = await asyncio.to_thread(generate_response, user_text)
-        video_path = await asyncio.to_thread(text_to_video, ai_response, update.message.chat_id)
-
-        # Stop the loading message update
-        task.cancel()
-        await loading_message.delete()
-
-        # Send the video or an error message
-        if video_path:
-            await update.message.reply_video(video_path)
-        else:
-            await update.message.reply_text('Sorry, there was an error processing your request.')
+        await update.message.reply_text('Sorry, there was an error processing your request.')
 
 async def handle_voice(update: Update, context: CallbackContext) -> None:
     try:
@@ -165,7 +183,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
             f.write(response.content)
 
         # Convert the file to WAV format
-        subprocess.run(["ffmpeg","-y" , "-i", "voice.ogg", "voice.wav"])
+        subprocess.run(["ffmpeg", "-y", "-i", "voice.ogg", "voice.wav"])
 
         # Recognize the audio and generate a response
         with sr.AudioFile('voice.wav') as source:
@@ -191,7 +209,8 @@ def main() -> None:
 
     # Add command and message handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("instructions", help_command))  # Add instruction command
+    application.add_handler(CommandHandler("instructions", instructions))
+    application.add_handler(CommandHandler("about", about))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
@@ -200,5 +219,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
